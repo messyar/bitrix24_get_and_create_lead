@@ -1,8 +1,6 @@
 from bitrix24 import Bitrix24, BitrixError
-import requests
 from flask import Flask, jsonify, request
 from os import environ
-from pprint import pprint
 import re
 
 # declaration of global variable
@@ -67,7 +65,7 @@ class Fields:
                         },
                    }
 
-    date_pattern = '(?:2[0-9][2-9][0-9])-(?:0?[1-9]|[12][0-9]|3[01])-(?:0?[1-9]|1[0-2]):(?:0?[1-9]|[1][0-9]|2[0-3]):(?:0?[0-9]|[0-5][0-9])'
+    date_pattern = '^(?:2[0-9][2-9][0-9])-(?:0?[1-9]|[12][0-9]|3[01])-(?:0?[1-9]|1[0-2]):(?:0?[1-9]|[1][0-9]|2[0-3]):(?:0?[0-9]|[1-5][1-9])$'
 
     fields_request = {
         'title': '.*',
@@ -87,10 +85,14 @@ class Fields:
 
 def serialize_deal(dict_to_serialize: dict) -> dict:
     """
-    Serialize request to format to add
+    Serialize request to format for Bitrix24
     :param dict_to_serialize: dict
-    :return: serialized dict
+    :return: serialized dict, if dict_to_serialized is dict, else False
     """
+
+    if not isinstance(dict_to_serialize, dict):
+        return False
+
     serialized_dict = {}
     for key in dict_to_serialize:
         if key == 'client':
@@ -101,6 +103,8 @@ def serialize_deal(dict_to_serialize: dict) -> dict:
             serialized_key = Fields.fields_bx24[serialized_key]["ALT_FIELD_NAME_BX24"]
         serialized_dict[serialized_key] = dict_to_serialize[key]
         if key == 'delivery_code':
+            # need to replace the symbol # in UTF-8 hex code, otherwise it is parsed
+            # as an empty string in Bitrix24
             serialized_dict[serialized_key] = dict_to_serialize[key].replace('#', '%23')
         if key == 'products':
             serialized_dict[serialized_key] = ', '.join(dict_to_serialize[key])
@@ -112,14 +116,14 @@ def serialize_deal(dict_to_serialize: dict) -> dict:
 def post_deal():
     """
     Post request processing function
-    :return:
+    :return: response
     """
     deal = request.json
     # check if fields in request correct
     check_result = check_fields_in_request(deal)
     # if fields in request not correct, send response with code 400 and descriptions of error
     if check_result['code'] != 200:
-        return jsonify(check_result['description']), check_result['code']
+        return jsonify(check_result['data']), check_result['code']
     # try to create or update deal if exists
     response = create_or_update_b24_deal(deal)
     return jsonify(response['data']), response['code']
@@ -131,48 +135,53 @@ def check_fields_in_request(request_dict: dict) -> dict:
 
     :return: if not correct returns dict with description of error and error code like
             {'description': 'Can't find some field', 'code': 400},
-            else fields are correct return dict, like {'description': 'ok', 'code': True}
+            else fields are correct return dict, like {'description': 'ok', 'code': 200}
     """
     pattern = Fields.fields_request
-    for key, value in request_dict.items():
-        if key not in pattern:
-            error_str = key + ' a field with this name is not allowed'
-            error_code = 400
-            return {'description': error_str, 'code': error_code}
+    error_code = 400
+    if 'client' not in request_dict:
+        error_str = ' the field with the name client was not found in request'
+        return {'data': error_str, 'code': error_code}
+
+    for key, value in pattern.items():
+        if key not in request_dict:
+            error_str = ' the field with the name {} was not found in request'.format(key)
+
+            return {'data': error_str, 'code': error_code}
         if key == 'client':
             for key2level, value2level in value.items():
-                if key2level not in pattern['client']:
-                    error_str = key2level + ' in structure "client" a field with this name is not allowed'
-                    error_code = 400
-                    return {'description': error_str, 'code': error_code}
+                if key2level not in request_dict['client']:
+                    error_str = key2level + ' in structure "client" the field with the name {} ' \
+                                            'was not found in request'.format(key)
+                    return {'data': error_str, 'code': error_code}
 
-                if not re.fullmatch(pattern['client'][key2level], value2level):
+                if not re.match(value2level, request_dict['client'][key2level]):
                     error_str = key2level + ' wrong format'
-                    error_code = 400
-                    return {'description': error_str, 'code': error_code}
+                    return {'data': error_str, 'code': error_code}
 
         if key == 'products':
-            if not isinstance(value, list):
-                return {'description': 'field "products" is not List', 'code': 400}
+            if not isinstance(request_dict[key], list):
+                return {'data': 'field "products" is not List', 'code': error_code}
 
         elif key != 'client':
 
-            if not re.match(pattern[key], value):
+            if not re.match(value, request_dict[key]):
                 error_str = key + ' wrong format'
-                error_code = 400
-                return {'description': error_str, 'code': error_code}
+                return {'data': error_str, 'code': error_code}
 
-    return {'description': 'ok', 'code': 200}
+    return {'data': 'ok', 'code': 200}
 
 
 def deal_exist(delivery_code):
     """
-    Check if deal already exist. If exist return True, else False
-    :return: bool
+    Check if deal already exists. If exist return True, else False
+    :return: False, if deal not exists, else return found deal
     """
 
     select_fields = ['ID', 'CONTACT_ID', 'TITLE', 'UF_CRM_DESCRIPTION', 'UF_CRM_PRODUCTS', 'UF_CRM_DELIVERY_ADRESS',
                      'UF_CRM_DELIVERY_DATE', 'UF_CRM_DELIVERY_CODE']
+    # need to replace the symbol # in UTF-8 hex code, otherwise it is parsed
+    # as an empty string in Bitrix24
     delivery_code = delivery_code.replace('#', '%23')
     found_deal = bx24.callMethod("crm.deal.list", filter={"UF_CRM_DELIVERY_CODE": delivery_code},
                                  select=select_fields)
@@ -184,7 +193,7 @@ def deal_exist(delivery_code):
 def client_exist(phone):
     """
     Check if client exist. If client exist return True, else False
-    :return: bool
+    :return: False, if client doesn't exists, else return found client
     """
     client = bx24.callMethod("crm.contact.list", filter={"PHONE": phone}, select=["ID", "NAME", "LAST_NAME"])
 
@@ -196,8 +205,8 @@ def client_exist(phone):
 
 def create_client(client):
     """
-    Creates client. If created successful return True, else False
-    :return: bool
+    Creates client in Bitrix24
+    :return: response
     """
     fields = {"NAME": client['name'],
               "LAST_NAME": client['surname'],
@@ -211,12 +220,12 @@ def create_client(client):
 
 def create_deal(deal_request):
     """
-    Creates client if it doesn't exist, create deal.
+    Creates deal in Bitrix24
     :return:
     """
+    # serialize deal in for sending in Bitrix24 with right format
     serialized_deal = serialize_deal(deal_request)
     bx24.callMethod("crm.deal.add", fields=serialized_deal)
-    pass
 
 
 def update_deal(deal_request, deal_found):
@@ -267,6 +276,10 @@ def create_or_update_b24_deal(deal_request):
     :param: deal_request: dict
     :return: response as dict
     """
+    result_of_check = check_fields_in_request(deal_request)
+    if result_of_check['code'] == 400:
+        return result_of_check
+
     phone = deal_request['client']['phone']
     found_client = client_exist(phone)
     deal = deal_request.copy()
@@ -312,5 +325,16 @@ def check_fields_in_bx24() -> None:
 
 if __name__ == '__main__':
     check_fields_in_bx24()
-    print('The service for receiving applications from the site and redirecting to Bitrix24 has been launched')
-    web_app.run()
+    flask_port = ''
+    try:
+        flask_port = environ['PORT']
+
+    except Exception as name_error:
+        print("Can't find Environment variable %s" % name_error)
+
+    flask_port = int(flask_port)
+    print('The service for receiving applications from the site and redirecting to Bitrix24 has been launched'
+          ' on port: ', flask_port)
+    from waitress import serve
+
+    serve(web_app, host="0.0.0.0", port=flask_port)
