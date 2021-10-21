@@ -113,7 +113,7 @@ def serialize_deal(dict_to_serialize: dict) -> dict:
 
 
 @web_app.route(url_to_request, methods=['POST', 'PUT', 'PATCH'])
-def post_deal():
+def post_deal() -> None:
     """
     Post request processing function
     :return: response
@@ -132,7 +132,7 @@ def post_deal():
 def check_fields_in_request(request_dict: dict) -> dict:
     """
     Checks if all fields in request is correct
-
+    :param request_dict: dict
     :return: if not correct returns dict with description of error and error code like
             {'description': 'Can't find some field', 'code': 400},
             else fields are correct return dict, like {'description': 'ok', 'code': 200}
@@ -172,9 +172,10 @@ def check_fields_in_request(request_dict: dict) -> dict:
     return {'data': 'ok', 'code': 200}
 
 
-def deal_exist(delivery_code):
+def deal_exist(delivery_code: dict) -> dict:
     """
     Check if deal already exists. If exist return True, else False
+    :param delivery_code: dict
     :return: False, if deal not exists, else return found deal
     """
 
@@ -190,9 +191,10 @@ def deal_exist(delivery_code):
     return False
 
 
-def client_exist(phone):
+def client_exist(phone: str) -> dict:
     """
     Check if client exist. If client exist return True, else False
+    :param phone: str
     :return: False, if client doesn't exists, else return found client
     """
     client = bx24.callMethod("crm.contact.list", filter={"PHONE": phone}, select=["ID", "NAME", "LAST_NAME"])
@@ -203,9 +205,10 @@ def client_exist(phone):
     return False
 
 
-def create_client(client):
+def create_client(client: dict) -> dict:
     """
     Creates client in Bitrix24
+    :param client: dict
     :return: response
     """
     fields = {"NAME": client['name'],
@@ -218,9 +221,10 @@ def create_client(client):
     return response
 
 
-def create_deal(deal_request):
+def create_deal(deal_request: dict) -> dict:
     """
     Creates deal in Bitrix24
+    :param deal_request: dict
     :return:
     """
     # serialize deal in for sending in Bitrix24 with right format
@@ -228,9 +232,11 @@ def create_deal(deal_request):
     bx24.callMethod("crm.deal.add", fields=serialized_deal)
 
 
-def update_deal(deal_request, deal_found):
+def update_deal(deal_request, deal_found) -> dict:
     """
     Compare fields in found deal with deal in request and updates the deal if necessary
+    :param deal_request: dict
+    :param deal_found: dict
     :return: dict
     """
     serialized_deal = serialize_deal(deal_request)
